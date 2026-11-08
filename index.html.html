@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Starfall: shooter espacial 3D</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&display=swap">
+<style>
+:root{--bg:#04060f;--fg:#e6efff;--dim:#8fa0c4;--cy:#4cc9f0;--red:#ff4d6d;--mint:#5eead4;--panel:rgba(7,11,24,.88);--line:rgba(143,160,196,.28);box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#04060f;--fg:#e6efff}}
+:root[data-theme="dark"]{--bg:#04060f;--fg:#e6efff}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--fg);font-family:"Chakra Petch",ui-sans-serif,system-ui,sans-serif}
+[hidden]{display:none!important}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+#hud{position:fixed;left:12px;top:calc(env(safe-area-inset-top,0px) + 10px);display:flex;gap:18px;align-items:center;font-size:15px;pointer-events:none}
+#hud b{font-weight:700;font-size:19px;margin-left:4px}
+.bar{width:120px;height:9px;border:1px solid var(--line);border-radius:5px;overflow:hidden}
+.bar i{display:block;height:100%;width:100%;background:var(--mint);transition:width .15s}
+button,.btn{font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 12px;cursor:pointer}
+button:hover,.btn:hover{border-color:var(--cy)}
+button:focus-visible,.btn:focus-within{outline:2px solid var(--cy);outline-offset:2px}
+#mb{position:fixed;right:12px;top:calc(env(safe-area-inset-top,0px) + 8px);z-index:5}
+#ov{position:fixed;inset:0;display:flex;align-items:flex-end;justify-content:center;padding:0 16px calc(env(safe-area-inset-bottom,0px) + 28px);pointer-events:none}
+.card{pointer-events:auto;max-width:460px;text-align:center;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px 24px}
+h1{margin:0 0 6px;font-size:40px;letter-spacing:.04em}
+.card p{margin:6px 0;color:var(--dim);line-height:1.45}
+#go{margin-top:10px;background:var(--cy);color:#04101a;font-weight:700;border-color:var(--cy);padding:10px 30px;font-size:17px}
+#pn{position:fixed;right:12px;top:calc(env(safe-area-inset-top,0px) + 52px);width:min(360px,calc(100% - 24px));max-height:calc(100% - 100px);overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;z-index:5}
+#pn h2{margin:0 0 4px;font-size:18px}
+#pn small{color:var(--dim);display:block;line-height:1.4}
+.row{padding:10px 0;border-top:1px solid var(--line)}
+.row .acts{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
+.row button,.row .btn{padding:5px 9px;font-size:13px}
+.row input{position:absolute;opacity:0;width:1px;height:1px}
+#msg{color:var(--red);margin-top:8px;font-size:13px}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="hud" hidden><div>Puntos<b id="sc">0</b></div><div>Oleada<b id="wv">1</b></div><div class="bar" title="Casco"><i id="hp"></i></div><div>Arma<b id="pw">1</b></div></div>
+<button id="mb">Modelos GLB</button>
+<div id="pn" hidden>
+  <h2>Modelos GLB</h2>
+  <small>Cada pieza del juego es una forma simple hasta que cargas un archivo .glb en su casilla. El tamaño se ajusta solo. Si la nave sale mirando hacia atrás, usa «Girar 180°».</small>
+  <div id="list"></div><div id="msg"></div>
+</div>
+<div id="ov"><div class="card">
+  <h1>Starfall</h1>
+  <p id="sub">Mueve el ratón o el dedo para pilotar. Mantén pulsado o usa Espacio para disparar. WASD y flechas también funcionan.</p>
+  <p id="res"></p>
+  <button id="go">Jugar</button>
+</div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script>
+/* ============ MODELOS: cada entrada es sustituible por un .glb ============
+   Dos formas de sustituir:
+   1) En el juego: botón «Modelos GLB» y carga el archivo en cada casilla.
+   2) En el código: pon una ruta en `url` (el archivo debe estar alojado en el mismo sitio
+      que la página; en una página publicada aquí solo funciona la opción 1).
+   size = tamaño máximo en unidades del juego · rotY = giro base para que la nave mire bien
+   Convención: el jugador mira hacia -Z (adelante); el enemigo mira hacia +Z (hacia ti). */
+const MODELS = {
+  player:   {label:'Nave del jugador', size:2.4, rotY:0,       url:null},
+  enemy:    {label:'Nave enemiga',     size:2.2, rotY:Math.PI, url:null},
+  asteroid: {label:'Asteroide',        size:2.0, rotY:0,       url:null},
+  powerup:  {label:'Potenciador',      size:1.1, rotY:0,       url:null}
+};
+
+const $=id=>document.getElementById(id), rnd=(a,b)=>a+Math.random()*(b-a);
+const cv=$('cv'), renderer=new THREE.WebGLRenderer({canvas:cv,antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+const scene=new THREE.Scene(); scene.background=new THREE.Color(0x04060f); scene.fog=new THREE.Fog(0x04060f,40,110);
+const camera=new THREE.PerspectiveCamera(60,1,.1,300);
+scene.add(new THREE.HemisphereLight(0xbcd6ff,0x1a1030,1.0));
+const sun=new THREE.DirectionalLight(0xffffff,1.1); sun.position.set(4,8,6); scene.add(sun);
+const world=new THREE.Group(); scene.add(world);
+
+/* ---- formas simples (geometrías y materiales compartidos) ---- */
+const std=(c,e=0,i=0)=>new THREE.MeshStandardMaterial({color:c,emissive:e,emissiveIntensity:i,roughness:.5,metalness:.4,flatShading:true});
+const G={cone:new THREE.ConeGeometry(.45,2.2,8).rotateX(-Math.PI/2),wing:new THREE.BoxGeometry(2.4,.08,.8),cock:new THREE.SphereGeometry(.22,12,8),eng:new THREE.SphereGeometry(.18,8,8),
+ econe:new THREE.ConeGeometry(.5,2,6).rotateX(Math.PI/2),ewing:new THREE.BoxGeometry(2.2,.08,.6),rock:new THREE.IcosahedronGeometry(1,0),
+ ring:new THREE.TorusGeometry(.45,.09,8,16),gem:new THREE.OctahedronGeometry(.26),bul:new THREE.CylinderGeometry(.06,.06,.9,6).rotateX(Math.PI/2),part:new THREE.SphereGeometry(.12,6,6)};
+const M={hull:std(0x4cc9f0,0x0a3a5a,.6),wing:std(0x9aa7c7),glass:std(0xffffff,0x88ddff,1),eng:new THREE.MeshBasicMaterial({color:0xffb347}),
+ ehull:std(0xff4d6d,0x5a0a1a,.6),ewing:std(0x7a2838),rock:std(0x7a7f8c),pup:std(0x5eead4,0x5eead4,.9),
+ pb:new THREE.MeshBasicMaterial({color:0x7df9ff}),eb:new THREE.MeshBasicMaterial({color:0xff6b81})};
+const mesh=(g,m,x=0,y=0,z=0)=>{const o=new THREE.Mesh(g,m);o.position.set(x,y,z);return o;};
+const BUILD={
+  player(){const g=new THREE.Group();g.add(mesh(G.cone,M.hull),mesh(G.wing,M.wing,0,0,.5),mesh(G.cock,M.glass,0,.2,-.1),mesh(G.eng,M.eng,0,0,1.15));return g;},
+  enemy(){const g=new THREE.Group();g.add(mesh(G.econe,M.ehull),mesh(G.ewing,M.ewing,0,0,-.4),mesh(G.eng,M.eng,0,0,-1.1));return g;},
+  asteroid(){const g=new THREE.Group(),m=mesh(G.rock,M.rock);m.scale.set(1,.8+Math.random()*.4,.9+Math.random()*.3);m.rotation.set(Math.random()*6,Math.random()*6,0);g.add(m);return g;},
+  powerup(){const g=new THREE.Group(),r=mesh(G.ring,M.pup);r.rotation.x=Math.PI/2;g.add(r,mesh(G.gem,M.pup));return g;}
+};
+
+/* ---- carga y sustitución de GLB ---- */
+const loader=new THREE.GLTFLoader(), cache={}, flip={};
+function wrapGLB(obj,slot){
+  const b=new THREE.Box3().setFromObject(obj),s=new THREE.Vector3(),c=new THREE.Vector3();b.getSize(s);b.getCenter(c);
+  obj.position.sub(c);const inner=new THREE.Group();inner.add(obj);inner.scale.setScalar(MODELS[slot].size/Math.max(s.x,s.y,s.z,1e-6));
+  const outer=new THREE.Group();outer.add(inner);return outer;
+}
+function makeModel(slot){
+  if(cache[slot]){const o=cache[slot].clone(true);o.rotation.y=MODELS[slot].rotY+(flip[slot]?Math.PI:0);const h=new THREE.Group();h.add(o);return h;}
+  return BUILD[slot]();
+}
+function useGLB(slot,gltf){cache[slot]=wrapGLB(gltf.scene,slot);refresh(slot);}
+for(const k in MODELS) if(MODELS[k].url) loader.load(MODELS[k].url,g=>useGLB(k,g),undefined,()=>{});
+function refresh(slot){ if(slot==='player') setPlayerModel(); if(state!=='play') buildShowcase(); buildPanel(); }
+
+/* ---- panel de modelos ---- */
+function buildPanel(){
+  const l=$('list');l.innerHTML='';
+  for(const k in MODELS){
+    const r=document.createElement('div');r.className='row';
+    r.innerHTML='<b>'+MODELS[k].label+'</b><small>'+(cache[k]?'Usando tu archivo GLB':'Usando formas simples')+'</small><div class="acts"></div>';
+    const a=r.querySelector('.acts');
+    const lab=document.createElement('label');lab.className='btn';lab.textContent='Cargar .glb';
+    const inp=document.createElement('input');inp.type='file';inp.accept='.glb';lab.appendChild(inp);
+    inp.onchange=()=>{const f=inp.files[0];if(!f)return;const fr=new FileReader();
+      fr.onload=()=>loader.parse(fr.result,'',g=>{$('msg').textContent='';useGLB(k,g);},()=>{$('msg').textContent='No se pudo leer ese archivo. Usa un .glb que incluya texturas.';});
+      fr.readAsArrayBuffer(f);};
+    const fl=document.createElement('button');fl.textContent='Girar 180°';fl.onclick=()=>{flip[k]=!flip[k];refresh(k);};
+    const rs=document.createElement('button');rs.textContent='Quitar';rs.onclick=()=>{delete cache[k];refresh(k);};
+    a.append(lab,fl,rs);l.appendChild(r);
+  }
+}
+$('mb').onclick=()=>{$('pn').hidden=!$('pn').hidden;};
+
+/* ---- estado ---- */
+let state='menu',T=0,wave=1,score=0,best=0,shake=0,FX=9,FY=4;
+try{best=+localStorage.getItem('starfall-best')||0;}catch(e){}
+const player={hold:new THREE.Group(),x:0,y:-1.5,tx:0,ty:-1.5,hp:100,power:1,cool:0,inv:0};
+world.add(player.hold);
+function setPlayerModel(){player.hold.clear();player.mesh=makeModel('player');player.hold.add(player.mesh);}
+setPlayerModel();
+const bullets=[],ebul=[],enemies=[],rocks=[],pups=[],parts=[];
+const show=new THREE.Group();world.add(show);
+function buildShowcase(){
+  show.clear();const sp=Math.min(3.2,2*Math.tan(Math.PI/6)*12*camera.aspect/5);
+  ['player','enemy','asteroid','powerup'].forEach((k,i)=>{const m=makeModel(k);m.position.set((i-1.5)*sp,1.8,-2);m.scale.setScalar(Math.min(1,sp/2.6));show.add(m);});
+  show.visible=true;
+}
+
+/* ---- estrellas ---- */
+const N=1400,sp=new Float32Array(N*3);
+for(let i=0;i<N;i++){sp[i*3]=rnd(-70,70);sp[i*3+1]=rnd(-45,45);sp[i*3+2]=rnd(-200,20);}
+const sg=new THREE.BufferGeometry();sg.setAttribute('position',new THREE.BufferAttribute(sp,3));
+scene.add(new THREE.Points(sg,new THREE.PointsMaterial({color:0xcfe0ff,size:.22,sizeAttenuation:true})));
+function stars(dt){for(let i=0;i<N;i++){sp[i*3+2]+=dt*(state==='play'?34+wave*2:12);if(sp[i*3+2]>20)sp[i*3+2]-=220;}sg.attributes.position.needsUpdate=true;}
+
+/* ---- sonido ---- */
+let AC;function sfx(f,d,type,v,f2){try{AC=AC||new(window.AudioContext||window.webkitAudioContext)();const t=AC.currentTime,o=AC.createOscillator(),g=AC.createGain();o.type=type||'square';o.frequency.setValueAtTime(f,t);if(f2)o.frequency.exponentialRampToValueAtTime(f2,t+d);g.gain.setValueAtTime(v||.04,t);g.gain.exponentialRampToValueAtTime(.001,t+d);o.connect(g);g.connect(AC.destination);o.start();o.stop(t+d);}catch(e){}}
+
+/* ---- entidades ---- */
+function add(arr,m,props){world.add(m);const e=Object.assign({m},props);arr.push(e);return e;}
+function rm(arr,i){world.remove(arr[i].m);arr.splice(i,1);}
+function boom(p,color,n,spd){const mat=new THREE.MeshBasicMaterial({color,transparent:true});
+  for(let i=0;i<n;i++){const m=new THREE.Mesh(G.part,mat);m.position.copy(p);world.add(m);parts.push({m,mat,life:.7,v:new THREE.Vector3(rnd(-1,1),rnd(-1,1),rnd(-1,1)).normalize().multiplyScalar(rnd(2,spd))});}}
+function fire(){
+  const o=player.power===1?[0]:player.power===2?[-.45,.45]:[-.7,0,.7];
+  o.forEach(x=>{const m=mesh(G.bul,M.pb,player.x+x,player.y,-1);add(bullets,m,{vx:x*5});});
+  sfx(880,.08,'square',.025,440);
+}
+function enemyFire(e){
+  const m=mesh(G.bul,M.eb,e.m.position.x,e.m.position.y,e.m.position.z+1);
+  const v=new THREE.Vector3(player.x-m.position.x,player.y-m.position.y,-m.position.z).normalize().multiplyScalar(26);
+  add(ebul,m,{v});
+}
+function hurt(d){
+  if(player.inv>0)return;player.hp-=d;player.inv=1;shake=.45;sfx(120,.3,'sawtooth',.07,50);
+  if(player.hp<=0){boom(player.hold.position,0x4cc9f0,28,12);boom(player.hold.position,0xffb347,18,8);gameOver();}
+}
+const d2=(a,b)=>a.position.distanceToSquared(b.position);
+
+function start(){
+  [bullets,ebul,enemies,rocks,pups,parts].forEach(a=>{while(a.length)rm(a,0);});
+  T=0;wave=1;score=0;player.hp=100;player.power=1;player.x=player.tx=0;player.y=player.ty=-1.5;player.inv=0;player.cool=0;
+  sE=1;sR=.6;sP=14;show.visible=false;player.hold.visible=true;state='play';$('ov').hidden=true;$('hud').hidden=false;
+}
+function gameOver(){
+  state='over';player.hold.visible=false;best=Math.max(best,score);try{localStorage.setItem('starfall-best',best);}catch(e){}
+  $('sub').textContent='La nave se ha perdido. Cada oleada trae más enemigos y asteroides.';
+  $('res').textContent='Puntos: '+score+'  ·  Récord: '+best;$('go').textContent='Volver a jugar';
+  $('ov').hidden=false;buildShowcase();
+}
+$('go').onclick=start;
+player.hold.visible=false;
+
+/* ---- entrada ---- */
+const keys={};let down=false;
+addEventListener('keydown',e=>{keys[e.code]=1;if(e.code==='Space'&&e.target===document.body)e.preventDefault();});
+addEventListener('keyup',e=>{keys[e.code]=0;});
+function aim(e){player.tx=((e.clientX/innerWidth)*2-1)*FX;player.ty=Math.max(-FY,Math.min(FY,-((e.clientY/innerHeight)*2-1)*FY+(e.pointerType==='touch'?1.2:0)));}
+cv.addEventListener('pointerdown',e=>{down=true;aim(e);});
+cv.addEventListener('pointermove',aim);
+addEventListener('pointerup',()=>{down=false;});
+
+/* ---- bucle ---- */
+let sE=1,sR=.6,sP=14;
+function update(dt){
+  stars(dt);
+  if(state!=='play'){show.children.forEach(c=>{c.rotation.y+=dt*.9;});camera.position.set(0,3,12);camera.lookAt(0,0,-8);return;}
+  T+=dt;wave=1+Math.floor(T/20);
+  const k=dt*14;
+  if(keys.KeyA||keys.ArrowLeft)player.tx-=k;if(keys.KeyD||keys.ArrowRight)player.tx+=k;
+  if(keys.KeyW||keys.ArrowUp)player.ty+=k;if(keys.KeyS||keys.ArrowDown)player.ty-=k;
+  player.tx=Math.max(-FX,Math.min(FX,player.tx));player.ty=Math.max(-FY,Math.min(FY,player.ty));
+  const px=player.x,f=Math.min(1,dt*10);player.x+=(player.tx-player.x)*f;player.y+=(player.ty-player.y)*f;
+  player.hold.position.set(player.x,player.y,0);
+  player.hold.rotation.z=-(player.tx-player.x)*.25;player.hold.rotation.x=(player.ty-player.y)*.15;
+  if(player.inv>0){player.inv-=dt;player.hold.visible=player.inv<=0||Math.floor(player.inv*20)%2===0;}
+  player.cool-=dt;if((down||keys.Space)&&player.cool<=0&&state==='play'){fire();player.cool=.17;}
+
+  if((sE-=dt)<=0){sE=Math.max(.45,1.5-wave*.1);const m=makeModel('enemy');m.position.set(rnd(-FX,FX),rnd(-FY,FY),-75);add(enemies,m,{hp:2,bx:m.position.x,ph:rnd(0,6),sh:rnd(1,2.2)});}
+  if((sR-=dt)<=0){sR=rnd(.7,1.4);const r=rnd(.7,1.7),m=makeModel('asteroid');m.position.set(rnd(-FX,FX),rnd(-FY,FY),-75);m.scale.setScalar(r);add(rocks,m,{r,hp:Math.ceil(r*2),rx:rnd(-1,1),ry:rnd(-1,1)});}
+  if((sP-=dt)<=0){sP=rnd(13,20);const m=makeModel('powerup');m.position.set(rnd(-FX,FX),rnd(-FY,FY),-75);add(pups,m,{});}
+
+  for(let i=bullets.length-1;i>=0;i--){const b=bullets[i];b.m.position.z-=60*dt;b.m.position.x+=b.vx*dt;if(b.m.position.z<-90)rm(bullets,i);}
+  for(let i=ebul.length-1;i>=0;i--){const b=ebul[i];b.m.position.addScaledVector(b.v,dt);
+    if(b.m.position.z>10){rm(ebul,i);continue;}
+    if(d2(b.m,player.hold)<.8){rm(ebul,i);hurt(10);}}
+  for(let i=enemies.length-1;i>=0;i--){const e=enemies[i],p=e.m.position;
+    p.z+=(14+wave*1.5)*dt;p.x=Math.max(-FX,Math.min(FX,e.bx+Math.sin(T*1.3+e.ph)*2.2));
+    if(p.z>-50&&(e.sh-=dt)<=0){enemyFire(e);e.sh=rnd(1.2,2.4)/(1+wave*.08);}
+    if(p.z>10){rm(enemies,i);continue;}
+    if(d2(e.m,player.hold)<1.6){boom(p,0xff4d6d,14,9);rm(enemies,i);hurt(25);}}
+  for(let i=rocks.length-1;i>=0;i--){const r=rocks[i];r.m.position.z+=(18+wave)*dt;r.m.rotation.x+=r.rx*dt;r.m.rotation.y+=r.ry*dt;
+    if(r.m.position.z>10){rm(rocks,i);continue;}
+    if(d2(r.m,player.hold)<(r.r+.7)**2){boom(r.m.position,0x9aa3b5,14,8);rm(rocks,i);hurt(20);}}
+  for(let i=pups.length-1;i>=0;i--){const u=pups[i];u.m.position.z+=12*dt;u.m.rotation.y+=dt*3;
+    if(u.m.position.z>10){rm(pups,i);continue;}
+    if(d2(u.m,player.hold)<2.2){boom(u.m.position,0x5eead4,12,6);rm(pups,i);player.power=Math.min(3,player.power+1);player.hp=Math.min(100,player.hp+25);score+=25;sfx(520,.25,'triangle',.06,1040);}}
+
+  for(let i=bullets.length-1;i>=0;i--){const b=bullets[i];let hit=false;
+    for(let j=enemies.length-1;j>=0&&!hit;j--){const e=enemies[j];if(d2(b.m,e.m)<1.5){hit=true;e.hp--;
+      if(e.hp<=0){boom(e.m.position,0xff8a5c,16,10);rm(enemies,j);score+=100;sfx(200,.25,'sawtooth',.05,60);}else sfx(300,.06,'square',.03);}}
+    for(let j=rocks.length-1;j>=0&&!hit;j--){const r=rocks[j];if(d2(b.m,r.m)<(r.r+.2)**2){hit=true;r.hp--;
+      if(r.hp<=0){boom(r.m.position,0xb3b9c9,16,9);rm(rocks,j);score+=50;sfx(150,.25,'sawtooth',.05,50);}}}
+    if(hit)rm(bullets,i);}
+  for(let i=parts.length-1;i>=0;i--){const p=parts[i];p.life-=dt;p.m.position.addScaledVector(p.v,dt);p.mat.opacity=Math.max(0,p.life/.7);if(p.life<=0){rm(parts,i);}}
+
+  shake=Math.max(0,shake-dt);
+  camera.position.set(player.x*.2+rnd(-1,1)*shake,3+rnd(-1,1)*shake,12);camera.lookAt(player.x*.1,0,-8);
+  $('sc').textContent=score;$('wv').textContent=wave;$('pw').textContent=player.power;$('hp').style.width=Math.max(0,player.hp)+'%';
+  $('hp').style.background=player.hp<30?'var(--red)':'var(--mint)';
+}
+function resize(){
+  const w=innerWidth,h=innerHeight;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();
+  FX=Math.min(9,Math.tan(Math.PI/6)*12*camera.aspect*.85);FY=4;if(state!=='play')buildShowcase();
+}
+addEventListener('resize',resize);
+buildPanel();resize();buildShowcase();
+let last=performance.now();
+(function loop(t){requestAnimationFrame(loop);const dt=Math.min(.05,(t-last)/1000);last=t;update(dt);renderer.render(scene,camera);})(last);
+</script>
+</body>
+</html>
